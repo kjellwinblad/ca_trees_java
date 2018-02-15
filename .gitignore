@@ -1,0 +1,9 @@
+project/target/
+target/
+*~
+\#*\#
+.\#*
+project/plugins.sbt
+.classpath
+.project
+.settings/
