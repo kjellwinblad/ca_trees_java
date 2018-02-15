@@ -1,4 +1,4 @@
-Java Implementation of Contention Adapting Search Trees 
+Java Implementations of Contention Adapting Search Trees 
 =======================================================
 **OBS: Work in progress**
 
