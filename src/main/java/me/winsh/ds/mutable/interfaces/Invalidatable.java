@@ -17,8 +17,6 @@
  *  along with catrees.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-package
-
 package me.winsh.ds.mutable.interfaces;
 
 public interface Invalidatable {
