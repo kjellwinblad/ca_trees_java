@@ -4,7 +4,7 @@ name := "catrees"
 // orgnization name (e.g., the package name of the project)
 organization := "me.winsh"
 
-version := "0.1-SNAPSHOT"
+version := "0.1"
 
 // project description
 description := """Implementations of Contention Adapting Search Trees"""
