@@ -41,9 +41,20 @@ autoScalaLibrary := false
 javacOptions ++= Seq("-source", "1.8", "-target", "1.8")
 
 // library dependencies. (orginization name) % (project name) % (version)
-libraryDependencies ++= Seq(
-  "org.scalatest" %% "scalatest" % "3.0.4" % "test"
-    //,
-  //"org.scala-lang" %% "scala-actors" % "2.11.6"
-)
+
+
+//Test dependencies
+
+scalaVersion := "2.11.1"
+
+libraryDependencies += "org.scalatest" % "scalatest_2.11" % "2.1.7" % "test"
+
+libraryDependencies += "org.scala-lang" % "scala-actors" % "2.11.1" % "test"
+
+libraryDependencies += "org.scala-lang" % "scala-actors" % "2.11.1" % "test"
+
+// libraryDependencies += "org.scalatest" %% "scalatest" % "3.0.4" % "test"
+
+// libraryDependencies += "org.scala-lang" %% "scala-actors" % "2.11.12" % "test"
+
 

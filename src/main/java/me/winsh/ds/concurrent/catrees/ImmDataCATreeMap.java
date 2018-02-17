@@ -22,10 +22,13 @@ package me.winsh.ds.concurrent.catrees;
 
 import java.util.AbstractMap;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.Map;
+import java.util.NavigableSet;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.concurrent.ConcurrentNavigableMap;
 import java.util.concurrent.locks.*;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
@@ -62,7 +65,7 @@ import java.io.*;
  * @param <K> key type
  * @param <V> value type
  */
-public class ImmDataCATreeMap<K, V> extends AbstractMap<K, V> {
+public class ImmDataCATreeMap<K, V> extends AbstractMap<K, V> implements ConcurrentNavigableMap<K, V> {
 	private volatile Object root = new ImmutableTreapMapHolder<K, V>();
 	private final Comparator<? super K> comparator;
 	// ====== FOR DEBUGING ======
@@ -644,7 +647,7 @@ public class ImmDataCATreeMap<K, V> extends AbstractMap<K, V> {
 		lockAll();
 		addAllToList(root, list);
 		unlockAll();
-		return new TreeSet<Map.Entry<K, V>>(list);
+		return new HashSet<Map.Entry<K, V>>(list);
 	}
 
 	// boolean equals(Object o);
@@ -1246,6 +1249,174 @@ public class ImmDataCATreeMap<K, V> extends AbstractMap<K, V> {
 			// Test get
 			System.out.println("set.get(7) = " + set.get(7));
 		}
+	}
+
+	@Override
+	public boolean remove(Object key, Object value) {
+		// TODO Auto-generated method stub
+		return false;
+	}
+
+	@Override
+	public boolean replace(K key, V oldValue, V newValue) {
+		// TODO Auto-generated method stub
+		return false;
+	}
+
+	@Override
+	public V replace(K key, V value) {
+		// TODO Auto-generated method stub
+		return null;
+	}
+
+	@Override
+	public Entry<K, V> lowerEntry(K key) {
+		// TODO Auto-generated method stub
+		return null;
+	}
+
+	@Override
+	public K lowerKey(K key) {
+		// TODO Auto-generated method stub
+		return null;
+	}
+
+	@Override
+	public Entry<K, V> floorEntry(K key) {
+		// TODO Auto-generated method stub
+		return null;
+	}
+
+	@Override
+	public K floorKey(K key) {
+		// TODO Auto-generated method stub
+		return null;
+	}
+
+	@Override
+	public Entry<K, V> ceilingEntry(K key) {
+		// TODO Auto-generated method stub
+		return null;
+	}
+
+	@Override
+	public K ceilingKey(K key) {
+		// TODO Auto-generated method stub
+		return null;
+	}
+
+	@Override
+	public Entry<K, V> higherEntry(K key) {
+		// TODO Auto-generated method stub
+		return null;
+	}
+
+	@Override
+	public K higherKey(K key) {
+		// TODO Auto-generated method stub
+		return null;
+	}
+
+	@Override
+	public Entry<K, V> firstEntry() {
+		// TODO Auto-generated method stub
+		return null;
+	}
+
+	@Override
+	public Entry<K, V> lastEntry() {
+		// TODO Auto-generated method stub
+		return null;
+	}
+
+	@Override
+	public Entry<K, V> pollFirstEntry() {
+		// TODO Auto-generated method stub
+		return null;
+	}
+
+	@Override
+	public Entry<K, V> pollLastEntry() {
+		// TODO Auto-generated method stub
+		return null;
+	}
+
+	@Override
+	public Comparator<? super K> comparator() {
+		// TODO Auto-generated method stub
+		return null;
+	}
+
+	@Override
+	public K firstKey() {
+		// TODO Auto-generated method stub
+		return null;
+	}
+
+	@Override
+	public K lastKey() {
+		// TODO Auto-generated method stub
+		return null;
+	}
+
+	@Override
+	public ConcurrentNavigableMap<K, V> subMap(K fromKey, boolean fromInclusive, K toKey, boolean toInclusive) {
+		// TODO Auto-generated method stub
+		return null;
+	}
+
+	@Override
+	public ConcurrentNavigableMap<K, V> headMap(K toKey, boolean inclusive) {
+		// TODO Auto-generated method stub
+		return null;
+	}
+
+	@Override
+	public ConcurrentNavigableMap<K, V> tailMap(K fromKey, boolean inclusive) {
+		// TODO Auto-generated method stub
+		return null;
+	}
+
+	@Override
+	public ConcurrentNavigableMap<K, V> subMap(K fromKey, K toKey) {
+		// TODO Auto-generated method stub
+		return null;
+	}
+
+	@Override
+	public ConcurrentNavigableMap<K, V> headMap(K toKey) {
+		// TODO Auto-generated method stub
+		return null;
+	}
+
+	@Override
+	public ConcurrentNavigableMap<K, V> tailMap(K fromKey) {
+		// TODO Auto-generated method stub
+		return null;
+	}
+
+	@Override
+	public ConcurrentNavigableMap<K, V> descendingMap() {
+		// TODO Auto-generated method stub
+		return null;
+	}
+
+	@Override
+	public NavigableSet<K> navigableKeySet() {
+		// TODO Auto-generated method stub
+		return null;
+	}
+
+	@Override
+	public NavigableSet<K> keySet() {
+		// TODO Auto-generated method stub
+		return null;
+	}
+
+	@Override
+	public NavigableSet<K> descendingKeySet() {
+		// TODO Auto-generated method stub
+		return null;
 	}
 
 }
