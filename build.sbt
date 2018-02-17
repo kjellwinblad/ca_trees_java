@@ -42,5 +42,8 @@ javacOptions ++= Seq("-source", "1.8", "-target", "1.8")
 
 // library dependencies. (orginization name) % (project name) % (version)
 libraryDependencies ++= Seq(
-
+  "org.scalatest" %% "scalatest" % "3.0.4" % "test"
+    //,
+  //"org.scala-lang" %% "scala-actors" % "2.11.6"
 )
+
