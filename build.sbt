@@ -18,7 +18,7 @@ homepage := Some(url("https://github.com/kjellwinblad/ca_trees_java"))
 scmInfo := Some(ScmInfo(url("https://github.com/kjellwinblad/ca_trees_java"),
                             "git@github.com:kjellwinblad/ca_trees_java.git"))
 
-developers := List(Developer("username",
+developers := List(Developer("kjellwinblad",
                              "Kjell Winblad",
                              "kjellwinblad@gmail.com",
                              url("https://winsh.me")))
@@ -49,12 +49,12 @@ scalaVersion := "2.11.1"
 
 libraryDependencies += "org.scalatest" % "scalatest_2.11" % "2.1.7" % "test"
 
-libraryDependencies += "org.scala-lang" % "scala-actors" % "2.11.1" % "test"
+libraryDependencies += "org.scalatest" % "scalatest_2.11" % "2.1.7" % "test"
 
 libraryDependencies += "org.scala-lang" % "scala-actors" % "2.11.1" % "test"
 
-// libraryDependencies += "org.scalatest" %% "scalatest" % "3.0.4" % "test"
+libraryDependencies += "org.scala-lang" % "scala-library" % "2.11.1" % "test"
 
-// libraryDependencies += "org.scala-lang" %% "scala-actors" % "2.11.12" % "test"
+
 
 

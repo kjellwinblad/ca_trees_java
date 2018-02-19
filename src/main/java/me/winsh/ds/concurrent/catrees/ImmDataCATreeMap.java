@@ -66,12 +66,10 @@ import java.io.*;
  * @param <V> value type
  */
 public class ImmDataCATreeMap<K, V> extends AbstractMap<K, V> implements ConcurrentNavigableMap<K, V> {
+	
 	private volatile Object root = new ImmutableTreapMapHolder<K, V>();
+	
 	private final Comparator<? super K> comparator;
-	// ====== FOR DEBUGING ======
-	@SuppressWarnings("unused")
-	private final static boolean DEBUG = false;
-	// ==========================
 
 	static private final class RouteNode {
 		volatile Object left;
@@ -91,54 +89,6 @@ public class ImmDataCATreeMap<K, V> extends AbstractMap<K, V> implements Concurr
 		}
 	}
 
-	// ==== Functions for debuging and testing
-
-	void printDotHelper(Object n, PrintStream writeTo, int level) {
-		try {
-			if (n instanceof RouteNode) {
-				RouteNode node = (RouteNode) n;
-				// LEFT
-				writeTo.print("\"" + node + level + " \"");
-				writeTo.print(" -> ");
-				writeTo.print("\"" + node.left + (level + 1) + " \"");
-				writeTo.println(";");
-				// RIGHT
-				writeTo.print("\"" + node + level + " \"");
-				writeTo.print(" -> ");
-				writeTo.print("\"" + node.right + (level + 1) + " \"");
-				writeTo.println(";");
-
-				printDotHelper(node.left, writeTo, level + 1);
-				printDotHelper(node.right, writeTo, level + 1);
-			}
-		} catch (Exception e) {
-			e.printStackTrace();
-		}
-	}
-
-	void printDot(Object node, String fileName) {
-		try {
-			lockAll();
-			Process p = new ProcessBuilder("dot", "-Tpng")
-					.redirectOutput(ProcessBuilder.Redirect.to(new File(fileName + ".png"))).start();
-			PrintStream writeTo = new PrintStream(p.getOutputStream());
-			writeTo.print("digraph G{\n");
-			writeTo.print("  graph [ordering=\"out\"];\n");
-			printDotHelper(node, writeTo, 0);
-			writeTo.print("}\n");
-			writeTo.close();
-			p.waitFor();
-			unlockAll();
-		} catch (Exception e) {
-			e.printStackTrace();
-		}
-	}
-
-	public void printDot(String fileName) {
-		printDot(root, fileName);
-	}
-	// === End of debug functions ==================
-
 	// === Constructors ============================
 
 	public ImmDataCATreeMap() {
@@ -149,38 +99,14 @@ public class ImmDataCATreeMap<K, V> extends AbstractMap<K, V> implements Concurr
 		this.comparator = comparator;
 	}
 
-	private int numberOfRouteNodes(Object currentNode) {
-		if (currentNode == null) {
-			return 0;
-		} else {
-			if (currentNode instanceof RouteNode) {
-				RouteNode r = (RouteNode) currentNode;
-				int sizeSoFar = numberOfRouteNodes(r.left);
-				return 1 + sizeSoFar + numberOfRouteNodes(r.right);
-			} else {
-				return 0;
-			}
-		}
-	}
 
-	public long getTraversedNodes() {
-		return threadLocalBuffers.get().getTraversedNodes();
-	}
-
-	public int numberOfRouteNodes() {
-		// System.err.println("RANGE_QUERY_TRAVERSED_NODES " +
-		// threadLocalBuffers.get().getTraversedNodes());
-		// System.err.println("NUMBER OF RANGE QUERIES " +
-		// threadLocalBuffers.get().getRangeQueries());
-		// System.err.println("TRAVERSED NODE PER QUERY " +
-		// ((double)threadLocalBuffers.get().getTraversedNodes())/((double)threadLocalBuffers.get().getRangeQueries()));
-		return numberOfRouteNodes(root);
-	}
 
 	// === Public functions and helper functions ===
 
 	// === Sorted Set Functions ====================
 
+	
+	//TODO rewrite this to make use of snapshot functionality
 	private int sizeHelper(Object currentNode) {
 		if (currentNode == null) {
 			return 0;
@@ -196,7 +122,8 @@ public class ImmDataCATreeMap<K, V> extends AbstractMap<K, V> implements Concurr
 			}
 		}
 	}
-
+	
+	//TODO rewrite this to make use of snapshot functionality
 	public int size() {
 		lockAll();
 		int size = sizeHelper(root);
@@ -480,32 +407,23 @@ public class ImmDataCATreeMap<K, V> extends AbstractMap<K, V> implements Concurr
 		while (true) {
 			ImmutableTreapMapHolder<K, V> baseNode = (ImmutableTreapMapHolder<K, V>) getBaseNode(key);
 			// First do an optimistic attempt
-			try {
-				long optimisticReadToken = baseNode.getOptimisticReadToken();
-				if (0L != optimisticReadToken && baseNode.isValid()) {
-					ImmutableTreapValue<K, V> root = baseNode.getRoot();
-					// V result = baseNode.get(key);
-					if (baseNode.validateOptimisticReadToken(optimisticReadToken)) {
-						return ImmutableTreapMap.get(root, (K) key, comparator);
-						// return result;
-					}
+			long optimisticReadToken = baseNode.getOptimisticReadToken();
+			if (0L != optimisticReadToken && baseNode.isValid()) {
+				ImmutableTreapValue<K, V> root = baseNode.getRoot();
+				if (baseNode.validateOptimisticReadToken(optimisticReadToken)) {
+					return ImmutableTreapMap.get(root, (K) key, comparator);
 				}
-			} catch (RuntimeException e) {
-				// This might throw exception due to inconsistent state.
-				// In that case we will take read lock
 			}
-			// System.err.println("FAILED GET");
-			// Optemistic attempt failed, do the normal approach
+			// Optimistic attempt failed, do the normal approach
 			baseNode.readLock();
 			baseNode.addToContentionStatistics();// Because the optimistic
-													// attempt failed
+												 // attempt failed
 			// Check if valid
 			if (baseNode.isValid() == false) {
 				baseNode.readUnlock();
 				continue; // retry
 			}
 			// Do the operation
-			// V result = baseNode.get(key);
 			ImmutableTreapValue<K, V> root = baseNode.getRoot();
 			baseNode.readUnlock();
 			return ImmutableTreapMap.get(root, (K) key, comparator);
@@ -572,6 +490,8 @@ public class ImmDataCATreeMap<K, V> extends AbstractMap<K, V> implements Concurr
 		unlockAll();
 	}
 
+	
+	// TODO this is not safe due to possibility of unlinked nodes. rewrite this to use the range search functionally
 	private void lockAllHelper(Object currentNode, LinkedList<ImmutableTreapMapHolder<K, V>> linkedList) {
 		try {
 			if (currentNode != null) {
@@ -642,6 +562,7 @@ public class ImmDataCATreeMap<K, V> extends AbstractMap<K, V> implements Concurr
 
 	// Set<K> keySet();
 	// Collection<V> values();
+	// TODO this should preserve order 
 	public Set<Map.Entry<K, V>> entrySet() {
 		LinkedList<Map.Entry<K, V>> list = new LinkedList<Map.Entry<K, V>>();
 		lockAll();
@@ -1418,5 +1339,87 @@ public class ImmDataCATreeMap<K, V> extends AbstractMap<K, V> implements Concurr
 		// TODO Auto-generated method stub
 		return null;
 	}
+	
+	
+	// ==== Functions for debuging and testing
+
+	private int numberOfRouteNodes(Object currentNode) {
+		if (currentNode == null) {
+			return 0;
+		} else {
+			if (currentNode instanceof RouteNode) {
+				RouteNode r = (RouteNode) currentNode;
+				int sizeSoFar = numberOfRouteNodes(r.left);
+				return 1 + sizeSoFar + numberOfRouteNodes(r.right);
+			} else {
+				return 0;
+			}
+		}
+	}
+
+	public long getTraversedNodes() {
+		return threadLocalBuffers.get().getTraversedNodes();
+	}
+
+	public int numberOfRouteNodes() {
+		// System.err.println("RANGE_QUERY_TRAVERSED_NODES " +
+		// threadLocalBuffers.get().getTraversedNodes());
+		// System.err.println("NUMBER OF RANGE QUERIES " +
+		// threadLocalBuffers.get().getRangeQueries());
+		// System.err.println("TRAVERSED NODE PER QUERY " +
+		// ((double)threadLocalBuffers.get().getTraversedNodes())/((double)threadLocalBuffers.get().getRangeQueries()));
+		return numberOfRouteNodes(root);
+	}
+	
+	// ====== FOR DEBUGING ======
+	@SuppressWarnings("unused")
+	private final static boolean DEBUG = false;
+	// ==========================
+	
+	void printDotHelper(Object n, PrintStream writeTo, int level) {
+		try {
+			if (n instanceof RouteNode) {
+				RouteNode node = (RouteNode) n;
+				// LEFT
+				writeTo.print("\"" + node + level + " \"");
+				writeTo.print(" -> ");
+				writeTo.print("\"" + node.left + (level + 1) + " \"");
+				writeTo.println(";");
+				// RIGHT
+				writeTo.print("\"" + node + level + " \"");
+				writeTo.print(" -> ");
+				writeTo.print("\"" + node.right + (level + 1) + " \"");
+				writeTo.println(";");
+
+				printDotHelper(node.left, writeTo, level + 1);
+				printDotHelper(node.right, writeTo, level + 1);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+	}
+
+	void printDot(Object node, String fileName) {
+		try {
+			lockAll();
+			Process p = new ProcessBuilder("dot", "-Tpng")
+					.redirectOutput(ProcessBuilder.Redirect.to(new File(fileName + ".png"))).start();
+			PrintStream writeTo = new PrintStream(p.getOutputStream());
+			writeTo.print("digraph G{\n");
+			writeTo.print("  graph [ordering=\"out\"];\n");
+			printDotHelper(node, writeTo, 0);
+			writeTo.print("}\n");
+			writeTo.close();
+			p.waitFor();
+			unlockAll();
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+	}
+
+	public void printDot(String fileName) {
+		printDot(root, fileName);
+	}
+	// === End of debug functions ==================
 
 }

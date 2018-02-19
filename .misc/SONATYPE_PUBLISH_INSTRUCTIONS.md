@@ -2,12 +2,13 @@
 
 
 1. Set up plugins using the scripts `.misc/add_plugins.sh` and `.misc/create_sonatype_login_info.sh`.
-2. run `sbt`
-3. run `set PgpKeys.useGpg in Global := true` in the sbt console
-4. run `set PgpKeys.gpgCommand in Global := "gpg2"` in the sbt console
-5. run `publishSigned` in the sbt console
-6. run `sonatypeRelease` in the sbt console
-
+3. Comment out test dependencies
+4. run `sbt`
+5. run `set PgpKeys.useGpg in Global := true` in the sbt console
+6. run `set PgpKeys.gpgCommand in Global := "gpg2"` in the sbt console
+7. run `publishSigned` in the sbt console
+8. run `sonatypeRelease` in the sbt console
+9. Comment back test dependencies
 
 # Sources
 
