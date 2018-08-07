@@ -29,6 +29,7 @@ import java.util.LinkedList;
 import java.util.Map;
 import java.util.NavigableSet;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.ConcurrentNavigableMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.locks.ReentrantLock;
@@ -373,61 +374,6 @@ public class ImmDataCATreeMap<K, V> extends AbstractMap<K, V> implements Concurr
 		}
 	}
 
-
-
-	
-	// TODO this is not safe due to possibility of unlinked nodes. rewrite this to use the range search functionally
-	private void lockAllHelper(Object currentNode, LinkedList<ImmutableTreapMapHolder<K, V>> linkedList) {
-		try {
-			if (currentNode != null) {
-				if (currentNode instanceof RouteNode) {
-					RouteNode r = (RouteNode) currentNode;
-					lockAllHelper(r.left, linkedList);
-					lockAllHelper(r.right, linkedList);
-				} else {
-					@SuppressWarnings("unchecked")
-					ImmutableTreapMapHolder<K, V> b = (ImmutableTreapMapHolder<K, V>) currentNode;
-					b.lock();
-					if (b.isValid()) {
-						linkedList.addLast(b);
-					} else {
-						// Retry
-						b.unlock();
-						for (ImmutableTreapMapHolder<K, V> m : linkedList) {
-							m.unlock();
-						}
-						throw new RuntimeException();
-					}
-				}
-			}
-		} catch (RuntimeException e) {
-			// Retry
-			lockAllHelper(root, new LinkedList<ImmutableTreapMapHolder<K, V>>());
-		}
-	}
-
-	private void unlockAllHelper(Object currentNode) {
-		if (currentNode != null) {
-			if (currentNode instanceof RouteNode) {
-				RouteNode b = (RouteNode) currentNode;
-				unlockAllHelper(b.left);
-				unlockAllHelper(b.right);
-			} else {
-				@SuppressWarnings("unchecked")
-				ImmutableTreapMapHolder<K, V> b = (ImmutableTreapMapHolder<K, V>) currentNode;
-				b.unlock();
-			}
-		}
-	}
-
-	private void lockAll() {
-		lockAllHelper(root, new LinkedList<ImmutableTreapMapHolder<K, V>>());
-	}
-
-	private void unlockAll() {
-		unlockAllHelper(root);
-	}
-
 	final private void addAllToList(Object currentNode, LinkedList<Map.Entry<K, V>> list) {
 		if (currentNode == null) {
 			return;
@@ -677,22 +623,271 @@ public class ImmDataCATreeMap<K, V> extends AbstractMap<K, V> implements Concurr
 
 
 
-	private void unlockBaseNode(final int mode, ImmutableTreapMapHolder<K, V> baseNode) {
-		if (mode == 0)
+	private void unlockBaseNode(final LOCKING_MODE mode, ImmutableTreapMapHolder<K, V> baseNode) {
+		if (mode == LOCKING_MODE.WRITE_LOCK)
 			baseNode.unlock();
-		else if (mode == 1)
+		else if (mode == LOCKING_MODE.READ_LOCK)
 			baseNode.readUnlock();
 	}
 
-	private void lockBaseNode(final int mode, ImmutableTreapMapHolder<K, V> baseNode) {
-		if (mode == 0)
+	private void lockBaseNode(final LOCKING_MODE mode, ImmutableTreapMapHolder<K, V> baseNode) {
+		if (mode == LOCKING_MODE.WRITE_LOCK)
 			baseNode.lock();
-		else if (mode == 1)
+		else if (mode == LOCKING_MODE.READ_LOCK)
 			baseNode.readLock();
 	}
 
 
+	@SuppressWarnings("unchecked")
+	private final ImmutableTreapValue<K, V> optimisticSubSet(final K lo, final K hi) {
+		// ThreadLocalBuffers tlbs = threadLocalBuffers.get();
+		Stack<RouteNode> stack = new Stack<>();// .getStack();
+		Stack<ImmutableTreapMapHolder<K, V>> lockedBaseNodesStack = new Stack<>();// tlbs.getLockedBaseNodesStack();
+		LongStack readTokenStack = new LongStack();// tlbs.getReadTokenStack();
+		ImmutableTreapMapHolder<K, V> baseNode;
+		// Lock all base nodes that might contain keys in the range
+		baseNode = getBaseNodeAndStack(lo, stack);
+		long optimisticReadToken = baseNode.getOptimisticReadToken();
+		if (!baseNode.isValid() || !baseNode.validateOptimisticReadToken(optimisticReadToken)) {
+			return null; // Fail
+		}
+		// First base node successfully locked
+		while (true) {
+			// Add the successfully locked base node to the completed list
+			lockedBaseNodesStack.push(baseNode);
+			readTokenStack.push(optimisticReadToken);
+			// Check if it is the end of our search
+			K baseNodeMaxKey = baseNode.maxKey();
+			if (baseNodeMaxKey != null && lessThan(hi, baseNodeMaxKey)) {
+				break; // We have locked all base nodes that we need!
+			}
+			// There might be more base nodes in the range, continue
+			baseNode = getNextBaseNodeAndStack(baseNode, stack);
+			if (baseNode == null) {
+				break;// The last base node is locked
+			}
+			optimisticReadToken = baseNode.getOptimisticReadToken();
+			if (!baseNode.isValid() || !baseNode.validateOptimisticReadToken(optimisticReadToken)) {
+				return null; // Fail
+			}
+		}
+		// We have successfully locked all the base nodes that we need
+		// Time to construct the results from the contents of the base nodes
+		// The linearization point is just before the first lock is unlocked
+		// Stack<STDAVLNode<K,V>> traverseStack = tlbs.getTraverseStack();
+		// TreapStack returnStack = new TreapStack();//tlbs.getReturnStack();
+		Object[] lockedBaseNodeArray = lockedBaseNodesStack.getStackArray();
+		ImmutableTreapValue<K, V> root = ImmutableTreapMap.createEmpty();
+		for (int i = 0; i < lockedBaseNodesStack.size(); i++) {
+			ImmutableTreapMapHolder<K, V> map = (ImmutableTreapMapHolder<K, V>) (lockedBaseNodeArray[i]);
+			root = ImmutableTreapMap.cheapJoin(root, map.getRoot());
+			if (!map.validateOptimisticReadToken(optimisticReadToken)) {
+				return null; // Fail
+			}
+			// returnStack.push(map.getRoot());
+			// returnStack.getStackArray()[16] = map.getRoot();
+			// if(ImmutableTreapMap.isEmpty(map.getRoot())){
+			// System.out.println("HEJ");
+			// };
+			// ImmutableTreapMap.isEmpty(map.getRoot());
+			// if (!map.validateOptimisticReadToken(optimisticReadToken)) {
+			// return null; // Fail
+			// }
+
+			// traverseStack.resetStack();
+		}
+		for (int i = 0; i < lockedBaseNodesStack.size(); i++) {
+			threadLocalBuffers.get().increaseTraversedNodes();
+		}
+		return root;// new TreapStack();//returnStack;
+	}
+
+
+	private static  enum LOCKING_MODE{
+		READ_LOCK,
+		WRITE_LOCK;
+	};
 	
+	@SuppressWarnings("unchecked")
+	private final Stack<ImmutableTreapMapHolder<K, V>> lockBaseNodes(final K lo, final K hi, final LOCKING_MODE mode) {
+		ThreadLocalBuffers tlbs = threadLocalBuffers.get();
+		Stack<RouteNode> stack = tlbs.getStack();
+		Stack<RouteNode> nextStack = tlbs.getNextStack();
+		Stack<ImmutableTreapMapHolder<K, V>> lockedBaseNodesStack = tlbs.getLockedBaseNodesStack();
+		ImmutableTreapMapHolder<K, V> baseNode;
+		boolean tryAgain;
+		// Lock all base nodes that might contain keys in the range
+		do {
+			if(lo == null) {
+				baseNode = getFirstBaseNodeAndStack(stack);
+			} else {
+				baseNode = getBaseNodeAndStack(lo, stack);
+			}
+			lockBaseNode(mode, baseNode);
+			tryAgain = !baseNode.isValid();
+			if (tryAgain) {
+				unlockBaseNode(mode, baseNode);
+				stack.resetStack();
+			}
+		} while (tryAgain);
+		// First base node successfully locked
+		outer: while (true) {
+			// Add the successfully locked base node to the completed list
+			lockedBaseNodesStack.push(baseNode);
+			// Check if it is the end of our search
+			K baseNodeMaxKey = baseNode.maxKey();
+			if (hi != null && baseNodeMaxKey != null && lessThan(hi, baseNodeMaxKey)) {
+				break; // We have locked all base nodes that we need!
+			}
+			// There might be more base nodes in the range, continue
+			ImmutableTreapMapHolder<K, V> lastLockedBaseNode = baseNode;
+			nextStack.copyStateFrom(stack); // Save the current position so we
+											// can try again
+			do {
+				baseNode = getNextBaseNodeAndStack(lastLockedBaseNode, stack);
+				if (baseNode == null) {
+					break outer;// The last base node is locked
+				}
+				lockBaseNode(mode, baseNode);
+				tryAgain = !baseNode.isValid();
+				if (tryAgain) {
+					unlockBaseNode(mode, baseNode);
+					// Reset stack
+					stack.copyStateFrom(nextStack);
+				}
+			} while (tryAgain);
+		}
+		return lockedBaseNodesStack;
+	}
+	
+	private final Stack<ImmutableTreapMapHolder<K, V>> lockBaseNodes(final LOCKING_MODE mode) {
+		return lockBaseNodes(null, null, mode);
+	}
+	
+	@SuppressWarnings("unchecked")
+	private final void unlockBaseNodes(Stack<ImmutableTreapMapHolder<K, V>> nodes, LOCKING_MODE mode) {
+		Object[] lockedBaseNodeArray = nodes.getStackArray();
+		if (mode == LOCKING_MODE.WRITE_LOCK && nodes.size() == 1) {
+			threadLocalBuffers.get().increaseTraversedNodes();
+			ImmutableTreapMapHolder<K, V> map = (ImmutableTreapMapHolder<K, V>) (lockedBaseNodeArray[0]);
+			// map.addKeysInRangeToStack(lo, hi, consumer, traverseStack);
+			// returnStack.push(map.getRoot());
+			adaptIfNeeded((ImmutableTreapMapHolder<K, V>) (lockedBaseNodeArray[0]));
+			unlockBaseNode(mode, map);
+		} else if (mode == LOCKING_MODE.READ_LOCK && nodes.size() == 1) {
+			threadLocalBuffers.get().increaseTraversedNodes();
+			ImmutableTreapMapHolder<K, V> map = (ImmutableTreapMapHolder<K, V>) (lockedBaseNodeArray[0]);
+			map.addToContentionStatistics();// Optimistic attempt failed
+			// returnStack.push(map.getRoot());
+			// map.addKeysInRangeToStack(lo, hi, consumer, traverseStack);
+			unlockBaseNode(mode, map);
+		} else {
+			for (int i = 0; i < nodes.size(); i++) {
+				threadLocalBuffers.get().increaseTraversedNodes();
+				ImmutableTreapMapHolder<K, V> map = (ImmutableTreapMapHolder<K, V>) (lockedBaseNodeArray[i]);
+				// returnStack.push(map.getRoot());
+				map.subManyFromContentionStatistics();
+				unlockBaseNode(mode, map);
+			}
+		}
+	}
+	
+	@SuppressWarnings("unchecked")
+	private ImmutableTreapMapHolder<K, V> getFirstBaseNodeAndStack(Stack<RouteNode> stack) {
+		Object currNode = root;
+		while (currNode instanceof RouteNode) {
+			RouteNode currNodeR = (RouteNode) currNode;
+			stack.push(currNodeR);
+			currNode = currNodeR.left;
+		}
+		return (ImmutableTreapMapHolder<K, V>) currNode;
+	}
+
+	@SuppressWarnings("unchecked")
+	private final void subSet(final K lo, final K hi, LOCKING_MODE mode, Consumer<K> consumer) {
+		ThreadLocalBuffers tlbs = threadLocalBuffers.get();
+		Stack<RouteNode> stack = tlbs.getStack();
+		Stack<RouteNode> nextStack = tlbs.getNextStack();
+		Stack<ImmutableTreapMapHolder<K, V>> lockedBaseNodesStack = tlbs.getLockedBaseNodesStack();
+		ImmutableTreapMapHolder<K, V> baseNode;
+		boolean tryAgain;
+		// Lock all base nodes that might contain keys in the range
+		do {
+			baseNode = getBaseNodeAndStack(lo, stack);
+			lockBaseNode(mode, baseNode);
+			tryAgain = !baseNode.isValid();
+			if (tryAgain) {
+				unlockBaseNode(mode, baseNode);
+				stack.resetStack();
+			}
+		} while (tryAgain);
+		// First base node successfully locked
+		outer: while (true) {
+			// Add the successfully locked base node to the completed list
+			lockedBaseNodesStack.push(baseNode);
+			// Check if it is the end of our search
+			K baseNodeMaxKey = baseNode.maxKey();
+			if (baseNodeMaxKey != null && lessThan(hi, baseNodeMaxKey)) {
+				break; // We have locked all base nodes that we need!
+			}
+			// There might be more base nodes in the range, continue
+			ImmutableTreapMapHolder<K, V> lastLockedBaseNode = baseNode;
+			nextStack.copyStateFrom(stack); // Save the current position so we
+											// can try again
+			do {
+				baseNode = getNextBaseNodeAndStack(lastLockedBaseNode, stack);
+				if (baseNode == null) {
+					break outer;// The last base node is locked
+				}
+				lockBaseNode(mode, baseNode);
+				tryAgain = !baseNode.isValid();
+				if (tryAgain) {
+					unlockBaseNode(mode, baseNode);
+					// Reset stack
+					stack.copyStateFrom(nextStack);
+				}
+			} while (tryAgain);
+		}
+		// We have successfully locked all the base nodes that we need
+		// Time to construct the results from the contents of the base nodes
+		// The linearization point is just before the first lock is unlocked
+		// Stack<ImmutableTreapValue<K, V>> returnStack = tlbs.getReturnStack();
+		ImmutableTreapValue<K, V> root = null;
+		Object[] lockedBaseNodeArray = lockedBaseNodesStack.getStackArray();
+		if (mode == LOCKING_MODE.WRITE_LOCK && lockedBaseNodesStack.size() == 1) {
+			threadLocalBuffers.get().increaseTraversedNodes();
+			ImmutableTreapMapHolder<K, V> map = (ImmutableTreapMapHolder<K, V>) (lockedBaseNodeArray[0]);
+			// map.addKeysInRangeToStack(lo, hi, consumer, traverseStack);
+			// returnStack.push(map.getRoot());
+			root = map.getRoot();
+			adaptIfNeeded((ImmutableTreapMapHolder<K, V>) (lockedBaseNodeArray[0]));
+			unlockBaseNode(mode, map);
+		} else if (mode == LOCKING_MODE.READ_LOCK && lockedBaseNodesStack.size() == 1) {
+			threadLocalBuffers.get().increaseTraversedNodes();
+			ImmutableTreapMapHolder<K, V> map = (ImmutableTreapMapHolder<K, V>) (lockedBaseNodeArray[0]);
+			map.addToContentionStatistics();// Optimistic attempt failed
+			// returnStack.push(map.getRoot());
+			root = map.getRoot();
+			// map.addKeysInRangeToStack(lo, hi, consumer, traverseStack);
+			unlockBaseNode(mode, map);
+		} else {
+			root = ImmutableTreapMap.createEmpty();
+			for (int i = 0; i < lockedBaseNodesStack.size(); i++) {
+				threadLocalBuffers.get().increaseTraversedNodes();
+				ImmutableTreapMapHolder<K, V> map = (ImmutableTreapMapHolder<K, V>) (lockedBaseNodeArray[i]);
+				// returnStack.push(map.getRoot());
+				root = ImmutableTreapMap.cheapJoin(root, map.getRoot());
+				map.subManyFromContentionStatistics();
+				unlockBaseNode(mode, map);
+			}
+		}
+		// Object[] returnStackArray = returnStack.getStackArray();
+		// for (int i = 0; i < returnStack.size(); i++) {
+		// ImmutableTreapValue<K, V> tree = (ImmutableTreapValue<K, V>)
+		// returnStackArray[i];
+		ImmutableTreapMap.traverseKeysInRange(root, lo, hi, consumer, comparator);
+		// }
+	}
 
 	
 	
@@ -758,7 +953,7 @@ public class ImmDataCATreeMap<K, V> extends AbstractMap<K, V> implements Concurr
 
 	private void printDot(Object node, String fileName) {
 		try {
-			lockAll();
+			Stack<ImmutableTreapMapHolder<K, V>> nodes =lockBaseNodes(LOCKING_MODE.WRITE_LOCK);
 			Process p = new ProcessBuilder("dot", "-Tpng")
 					.redirectOutput(ProcessBuilder.Redirect.to(new File(fileName + ".png"))).start();
 			PrintStream writeTo = new PrintStream(p.getOutputStream());
@@ -768,7 +963,7 @@ public class ImmDataCATreeMap<K, V> extends AbstractMap<K, V> implements Concurr
 			writeTo.print("}\n");
 			writeTo.close();
 			p.waitFor();
-			unlockAll();
+			unlockBaseNodes(nodes, LOCKING_MODE.WRITE_LOCK);
 		} catch (Exception e) {
 			e.printStackTrace();
 		}
@@ -895,9 +1090,9 @@ public class ImmDataCATreeMap<K, V> extends AbstractMap<K, V> implements Concurr
 
 	//TODO rewrite this to make use of snapshot functionality
 	public int size() {
-		lockAll();
+		Stack<ImmutableTreapMapHolder<K, V>> nodes = lockBaseNodes(LOCKING_MODE.READ_LOCK);
 		int size = sizeHelper(root);
-		unlockAll();
+		unlockBaseNodes(nodes, LOCKING_MODE.READ_LOCK);
 		return size;
 	}
 
@@ -994,19 +1189,25 @@ public class ImmDataCATreeMap<K, V> extends AbstractMap<K, V> implements Concurr
 	}
 
 	public void clear() {
-		lockAll();
+		Stack<ImmutableTreapMapHolder<K, V>> nodes =lockBaseNodes(LOCKING_MODE.WRITE_LOCK);
 		root = new ImmutableTreapMapHolder<K, V>();
-		unlockAll();
+		Object[] ns = nodes.getStackArray();
+		for(int i = 0; i < nodes.size(); i++ ) {
+			@SuppressWarnings("unchecked")
+			ImmutableTreapMapHolder<K, V> node = (ImmutableTreapMapHolder<K, V>) ns[i];
+			node.invalidate();
+		}
+		unlockBaseNodes(nodes, LOCKING_MODE.WRITE_LOCK);
 	}
 	
 	// Set<K> keySet();
 	// Collection<V> values();
-	// TODO this should preserve order 
+	// TODO this should preserve order make use of snapshot capability 
 	public Set<Map.Entry<K, V>> entrySet() {
 		LinkedList<Map.Entry<K, V>> list = new LinkedList<Map.Entry<K, V>>();
-		lockAll();
+		Stack<ImmutableTreapMapHolder<K, V>> nodes =lockBaseNodes(LOCKING_MODE.READ_LOCK);
 		addAllToList(root, list);
-		unlockAll();
+		unlockBaseNodes(nodes, LOCKING_MODE.READ_LOCK);
 		return new HashSet<Map.Entry<K, V>>(list);
 	}
 	
@@ -1033,219 +1234,13 @@ public class ImmDataCATreeMap<K, V> extends AbstractMap<K, V> implements Concurr
 		ImmutableTreapValue<K, V> returnValue = optimisticSubSet(lo, hi);
 		if (null == returnValue) {
 			// System.out.print("F");
-			subSet(lo, hi, 1, consumer);
+			subSet(lo, hi, LOCKING_MODE.READ_LOCK, consumer);
 		} else {
-			// System.out.print("S");
-			// ImmutableTreapValue[] returnStackArray = returnValue.getStackArray();
-			// //System.out.print(returnValue.size() + " ");
-			// for (int i = 0; i < returnValue.size(); i++) {
-			// //ImmutableTreapValue tree = returnStackArray[i];
-			// //ImmutableTreapMap.traverseKeysInRange(tree, lo, hi, consumer, comparator);
-			// }
-			// ImmutableTreapMap.isEmpty(returnValue);
 			ImmutableTreapMap.traverseKeysInRange(returnValue, lo, hi, consumer, comparator);
 		}
 	}
 	
-	@SuppressWarnings("unchecked")
-	public final ImmutableTreapValue<K, V> optimisticSubSet(final K lo, final K hi) {
-		// ThreadLocalBuffers tlbs = threadLocalBuffers.get();
-		Stack<RouteNode> stack = new Stack<>();// .getStack();
-		Stack<ImmutableTreapMapHolder<K, V>> lockedBaseNodesStack = new Stack<>();// tlbs.getLockedBaseNodesStack();
-		LongStack readTokenStack = new LongStack();// tlbs.getReadTokenStack();
-		ImmutableTreapMapHolder<K, V> baseNode;
-		// Lock all base nodes that might contain keys in the range
-		baseNode = getBaseNodeAndStack(lo, stack);
-		long optimisticReadToken = baseNode.getOptimisticReadToken();
-		if (!baseNode.isValid() || !baseNode.validateOptimisticReadToken(optimisticReadToken)) {
-			return null; // Fail
-		}
-		// First base node successfully locked
-		while (true) {
-			// Add the successfully locked base node to the completed list
-			lockedBaseNodesStack.push(baseNode);
-			readTokenStack.push(optimisticReadToken);
-			// Check if it is the end of our search
-			K baseNodeMaxKey = baseNode.maxKey();
-			if (baseNodeMaxKey != null && lessThan(hi, baseNodeMaxKey)) {
-				break; // We have locked all base nodes that we need!
-			}
-			// There might be more base nodes in the range, continue
-			baseNode = getNextBaseNodeAndStack(baseNode, stack);
-			if (baseNode == null) {
-				break;// The last base node is locked
-			}
-			optimisticReadToken = baseNode.getOptimisticReadToken();
-			if (!baseNode.isValid() || !baseNode.validateOptimisticReadToken(optimisticReadToken)) {
-				return null; // Fail
-			}
-		}
-		// We have successfully locked all the base nodes that we need
-		// Time to construct the results from the contents of the base nodes
-		// The linearization point is just before the first lock is unlocked
-		// Stack<STDAVLNode<K,V>> traverseStack = tlbs.getTraverseStack();
-		// TreapStack returnStack = new TreapStack();//tlbs.getReturnStack();
-		Object[] lockedBaseNodeArray = lockedBaseNodesStack.getStackArray();
-		ImmutableTreapValue<K, V> root = ImmutableTreapMap.createEmpty();
-		for (int i = 0; i < lockedBaseNodesStack.size(); i++) {
-			ImmutableTreapMapHolder<K, V> map = (ImmutableTreapMapHolder<K, V>) (lockedBaseNodeArray[i]);
-			root = ImmutableTreapMap.cheapJoin(root, map.getRoot());
-			if (!map.validateOptimisticReadToken(optimisticReadToken)) {
-				return null; // Fail
-			}
-			// returnStack.push(map.getRoot());
-			// returnStack.getStackArray()[16] = map.getRoot();
-			// if(ImmutableTreapMap.isEmpty(map.getRoot())){
-			// System.out.println("HEJ");
-			// };
-			// ImmutableTreapMap.isEmpty(map.getRoot());
-			// if (!map.validateOptimisticReadToken(optimisticReadToken)) {
-			// return null; // Fail
-			// }
 
-			// traverseStack.resetStack();
-		}
-		for (int i = 0; i < lockedBaseNodesStack.size(); i++) {
-			threadLocalBuffers.get().increaseTraversedNodes();
-		}
-		return root;// new TreapStack();//returnStack;
-	}
-
-
-	@SuppressWarnings("unchecked")
-	public final Stack<ImmutableTreapMapHolder<K, V>> lockBaseNodes(final K lo, final K hi, final int mode) {
-		ThreadLocalBuffers tlbs = threadLocalBuffers.get();
-		Stack<RouteNode> stack = tlbs.getStack();
-		Stack<RouteNode> nextStack = tlbs.getNextStack();
-		Stack<ImmutableTreapMapHolder<K, V>> lockedBaseNodesStack = tlbs.getLockedBaseNodesStack();
-		ImmutableTreapMapHolder<K, V> baseNode;
-		boolean tryAgain;
-		// Lock all base nodes that might contain keys in the range
-		do {
-			baseNode = getBaseNodeAndStack(lo, stack);
-			lockBaseNode(mode, baseNode);
-			tryAgain = !baseNode.isValid();
-			if (tryAgain) {
-				unlockBaseNode(mode, baseNode);
-				stack.resetStack();
-			}
-		} while (tryAgain);
-		// First base node successfully locked
-		outer: while (true) {
-			// Add the successfully locked base node to the completed list
-			lockedBaseNodesStack.push(baseNode);
-			// Check if it is the end of our search
-			K baseNodeMaxKey = baseNode.maxKey();
-			if (baseNodeMaxKey != null && lessThan(hi, baseNodeMaxKey)) {
-				break; // We have locked all base nodes that we need!
-			}
-			// There might be more base nodes in the range, continue
-			ImmutableTreapMapHolder<K, V> lastLockedBaseNode = baseNode;
-			nextStack.copyStateFrom(stack); // Save the current position so we
-											// can try again
-			do {
-				baseNode = getNextBaseNodeAndStack(lastLockedBaseNode, stack);
-				if (baseNode == null) {
-					break outer;// The last base node is locked
-				}
-				lockBaseNode(mode, baseNode);
-				tryAgain = !baseNode.isValid();
-				if (tryAgain) {
-					unlockBaseNode(mode, baseNode);
-					// Reset stack
-					stack.copyStateFrom(nextStack);
-				}
-			} while (tryAgain);
-		}
-		return lockedBaseNodesStack;
-	}
-	
-	
-	@SuppressWarnings("unchecked")
-	public final void subSet(final K lo, final K hi, final int mode, Consumer<K> consumer) {
-		ThreadLocalBuffers tlbs = threadLocalBuffers.get();
-		Stack<RouteNode> stack = tlbs.getStack();
-		Stack<RouteNode> nextStack = tlbs.getNextStack();
-		Stack<ImmutableTreapMapHolder<K, V>> lockedBaseNodesStack = tlbs.getLockedBaseNodesStack();
-		ImmutableTreapMapHolder<K, V> baseNode;
-		boolean tryAgain;
-		// Lock all base nodes that might contain keys in the range
-		do {
-			baseNode = getBaseNodeAndStack(lo, stack);
-			lockBaseNode(mode, baseNode);
-			tryAgain = !baseNode.isValid();
-			if (tryAgain) {
-				unlockBaseNode(mode, baseNode);
-				stack.resetStack();
-			}
-		} while (tryAgain);
-		// First base node successfully locked
-		outer: while (true) {
-			// Add the successfully locked base node to the completed list
-			lockedBaseNodesStack.push(baseNode);
-			// Check if it is the end of our search
-			K baseNodeMaxKey = baseNode.maxKey();
-			if (baseNodeMaxKey != null && lessThan(hi, baseNodeMaxKey)) {
-				break; // We have locked all base nodes that we need!
-			}
-			// There might be more base nodes in the range, continue
-			ImmutableTreapMapHolder<K, V> lastLockedBaseNode = baseNode;
-			nextStack.copyStateFrom(stack); // Save the current position so we
-											// can try again
-			do {
-				baseNode = getNextBaseNodeAndStack(lastLockedBaseNode, stack);
-				if (baseNode == null) {
-					break outer;// The last base node is locked
-				}
-				lockBaseNode(mode, baseNode);
-				tryAgain = !baseNode.isValid();
-				if (tryAgain) {
-					unlockBaseNode(mode, baseNode);
-					// Reset stack
-					stack.copyStateFrom(nextStack);
-				}
-			} while (tryAgain);
-		}
-		// We have successfully locked all the base nodes that we need
-		// Time to construct the results from the contents of the base nodes
-		// The linearization point is just before the first lock is unlocked
-		// Stack<ImmutableTreapValue<K, V>> returnStack = tlbs.getReturnStack();
-		ImmutableTreapValue<K, V> root = null;
-		Object[] lockedBaseNodeArray = lockedBaseNodesStack.getStackArray();
-		if (mode == 0 && lockedBaseNodesStack.size() == 1) {
-			threadLocalBuffers.get().increaseTraversedNodes();
-			ImmutableTreapMapHolder<K, V> map = (ImmutableTreapMapHolder<K, V>) (lockedBaseNodeArray[0]);
-			// map.addKeysInRangeToStack(lo, hi, consumer, traverseStack);
-			// returnStack.push(map.getRoot());
-			root = map.getRoot();
-			adaptIfNeeded((ImmutableTreapMapHolder<K, V>) (lockedBaseNodeArray[0]));
-			unlockBaseNode(mode, map);
-		} else if (mode == 1 && lockedBaseNodesStack.size() == 1) {
-			threadLocalBuffers.get().increaseTraversedNodes();
-			ImmutableTreapMapHolder<K, V> map = (ImmutableTreapMapHolder<K, V>) (lockedBaseNodeArray[0]);
-			map.addToContentionStatistics();// Optimistic attempt failed
-			// returnStack.push(map.getRoot());
-			root = map.getRoot();
-			// map.addKeysInRangeToStack(lo, hi, consumer, traverseStack);
-			unlockBaseNode(mode, map);
-		} else {
-			root = ImmutableTreapMap.createEmpty();
-			for (int i = 0; i < lockedBaseNodesStack.size(); i++) {
-				threadLocalBuffers.get().increaseTraversedNodes();
-				ImmutableTreapMapHolder<K, V> map = (ImmutableTreapMapHolder<K, V>) (lockedBaseNodeArray[i]);
-				// returnStack.push(map.getRoot());
-				root = ImmutableTreapMap.cheapJoin(root, map.getRoot());
-				map.subManyFromContentionStatistics();
-				unlockBaseNode(mode, map);
-			}
-		}
-		// Object[] returnStackArray = returnStack.getStackArray();
-		// for (int i = 0; i < returnStack.size(); i++) {
-		// ImmutableTreapValue<K, V> tree = (ImmutableTreapValue<K, V>)
-		// returnStackArray[i];
-		ImmutableTreapMap.traverseKeysInRange(root, lo, hi, consumer, comparator);
-		// }
-	}
 	
 	@Override
 	public boolean remove(Object key, Object value) {
